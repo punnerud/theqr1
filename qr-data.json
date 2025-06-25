@@ -1,0 +1,44 @@
+{
+  "qrCodes": [
+    {
+      "text": "https://www.google.com",
+      "color": "#FF6B6B",
+      "name": "Google"
+    },
+    {
+      "text": "https://www.github.com",
+      "color": "#4ECDC4",
+      "name": "GitHub"
+    },
+    {
+      "text": "Hello World!",
+      "color": "#45B7D1",
+      "name": "Hello Message"
+    },
+    {
+      "text": "QR Scanner Test",
+      "color": "#96CEB4",
+      "name": "Test Code"
+    },
+    {
+      "text": "https://www.youtube.com",
+      "color": "#FECA57",
+      "name": "YouTube"
+    },
+    {
+      "text": "Sample Text 123",
+      "color": "#FF9FF3",
+      "name": "Sample"
+    },
+    {
+      "text": "Meeting Room A",
+      "color": "#54A0FF",
+      "name": "Room A"
+    },
+    {
+      "text": "Product Code: ABC123",
+      "color": "#5F27CD",
+      "name": "Product"
+    }
+  ]
+} 

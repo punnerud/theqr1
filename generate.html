@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code Generator</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Additional styles for static generator */
+        .generator-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .qr-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin: 30px 0;
+        }
+        
+        .qr-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 25px;
+            border-radius: 20px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+        
+        .qr-card:hover {
+            transform: translateY(-10px);
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+        }
+        
+        .qr-image {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin: 15px 0;
+            display: inline-block;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .qr-image img {
+            display: block;
+            max-width: 200px;
+            height: auto;
+        }
+        
+        .qr-info h3 {
+            margin: 15px 0 10px 0;
+            color: white;
+            font-size: 1.2rem;
+        }
+        
+        .qr-text {
+            color: rgba(255, 255, 255, 0.8);
+            margin: 10px 0;
+            word-break: break-all;
+            font-size: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 8px;
+        }
+        
+        .qr-color {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin: 15px auto;
+            border: 3px solid white;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 25px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            margin: 30px 0;
+        }
+        
+        .instructions h3 {
+            margin-top: 0;
+            color: white;
+        }
+        
+        .instructions ol {
+            color: rgba(255, 255, 255, 0.9);
+            line-height: 1.6;
+        }
+        
+        .loading {
+            text-align: center;
+            color: white;
+            padding: 40px;
+        }
+        
+        .error {
+            text-align: center;
+            color: #ff6b6b;
+            padding: 40px;
+            background: rgba(255, 107, 107, 0.1);
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 QR Code Generator</h1>
+            <a href="index.html" class="back-link">← Back to Scanner</a>
+        </div>
+        
+        <div class="generator-container">
+            <div id="loading" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 15px;">⏳</div>
+                <p>Loading QR codes...</p>
+            </div>
+            
+            <div id="error" class="error" style="display: none;">
+                <div style="font-size: 3rem; margin-bottom: 15px;">⚠️</div>
+                <p>Failed to load QR codes. Make sure qr-data.json is available.</p>
+            </div>
+            
+            <div id="qr-grid" class="qr-grid" style="display: none;">
+                <!-- QR codes will be populated here -->
+            </div>
+            
+            <div class="instructions">
+                <h3>📱 How to Use:</h3>
+                <ol>
+                    <li><strong>Choose a QR code</strong> from the grid below</li>
+                    <li><strong>Display it</strong> on this device's screen</li>
+                    <li><strong>Open the scanner</strong> on another device</li>
+                    <li><strong>Point the camera</strong> at the QR code</li>
+                    <li><strong>Watch for the colored overlay</strong> when matched!</li>
+                </ol>
+                <p><strong>💡 Tip:</strong> These QR codes are pre-generated static images that work with any web server!</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadQRCodes() {
+            try {
+                // Load QR data from JSON
+                const response = await fetch('qr-data.json');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                // Hide loading, show grid
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('qr-grid').style.display = 'grid';
+                
+                // Generate QR cards
+                const grid = document.getElementById('qr-grid');
+                grid.innerHTML = '';
+                
+                data.qrCodes.forEach((qr, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'qr-card';
+                    
+                    card.innerHTML = `
+                        <div class="qr-info">
+                            <h3>${qr.name}</h3>
+                            <div class="qr-color" style="background-color: ${qr.color};"></div>
+                        </div>
+                        <div class="qr-image">
+                            <img src="qr-images/qr_${index}.png" alt="QR Code for ${qr.name}" />
+                        </div>
+                        <div class="qr-text">${qr.text}</div>
+                    `;
+                    
+                    grid.appendChild(card);
+                });
+                
+                console.log(`Loaded ${data.qrCodes.length} QR codes`);
+                
+            } catch (error) {
+                console.error('Error loading QR codes:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+            }
+        }
+        
+        // Load QR codes when page loads
+        document.addEventListener('DOMContentLoaded', loadQRCodes);
+    </script>
+</body>
+</html> 

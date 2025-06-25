@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code Scanner</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>QR Code Scanner</h1>
+            <a href="generate.html" class="generator-link">🎯 Generate QR Codes</a>
+        </div>
+        <div class="scanner-container">
+            <video id="video" autoplay muted playsinline></video>
+            <canvas id="canvas" style="display: none;"></canvas>
+            <div id="overlay" class="overlay"></div>
+            <div id="scanner-frame" class="scanner-frame"></div>
+        </div>
+        <div class="controls">
+            <button id="startBtn">Start Scanner</button>
+            <button id="stopBtn" style="display: none;">Stop Scanner</button>
+        </div>
+        <div id="result" class="result"></div>
+        <div id="status" class="status">Click "Start Scanner" to begin</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <script src="script.js"></script>
+</body>
+</html> 
