@@ -8,12 +8,16 @@ class QRScanner {
         this.stopBtn = document.getElementById('stopBtn');
         this.result = document.getElementById('result');
         this.status = document.getElementById('status');
+        this.codesScanned = document.getElementById('codes-scanned');
+        this.codesList = document.getElementById('codes-list');
         
         this.stream = null;
         this.animationId = null;
         this.qrData = null;
-        this.lastScannedCode = null;
-        this.lastScannedTime = 0;
+        
+        // Track multiple QR codes with timing
+        this.trackedCodes = new Map(); // Map of code data -> tracking info
+        this.activeOverlays = new Map(); // Map of code data -> overlay element
         
         this.init();
     }
@@ -29,6 +33,9 @@ class QRScanner {
             this.stopBtn.addEventListener('click', () => this.stopScanning());
             
             this.status.textContent = 'Ready to scan QR codes';
+            
+            // Start timing update loop
+            this.startTimingUpdates();
         } catch (error) {
             console.error('Error initializing:', error);
             this.status.textContent = 'Error loading QR data';
@@ -60,6 +67,7 @@ class QRScanner {
             this.startBtn.style.display = 'none';
             this.stopBtn.style.display = 'inline-block';
             this.status.textContent = 'Scanning for QR codes...';
+            this.codesScanned.style.display = 'block';
             
         } catch (error) {
             console.error('Error accessing camera:', error);
@@ -79,13 +87,15 @@ class QRScanner {
         }
         
         this.video.srcObject = null;
-        this.clearOverlay();
+        this.clearAllOverlays();
+        this.trackedCodes.clear();
         
         this.startBtn.style.display = 'inline-block';
         this.stopBtn.style.display = 'none';
         this.status.textContent = 'Scanner stopped';
         this.result.textContent = '';
         this.result.className = 'result';
+        this.codesScanned.style.display = 'none';
     }
     
     startQRDetection() {
@@ -94,13 +104,9 @@ class QRScanner {
                 this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
                 const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
                 
-                const code = jsQR(imageData.data, imageData.width, imageData.height);
-                
-                if (code) {
-                    this.handleQRCode(code);
-                } else {
-                    this.clearOverlay();
-                }
+                // Find all QR codes in the image
+                const detectedCodes = this.findAllQRCodes(imageData);
+                this.handleMultipleQRCodes(detectedCodes);
             }
             
             this.animationId = requestAnimationFrame(detect);
@@ -109,104 +115,200 @@ class QRScanner {
         detect();
     }
     
-    handleQRCode(code) {
-        const currentTime = Date.now();
+    findAllQRCodes(imageData) {
+        const codes = [];
         
-        // Prevent duplicate scans within 2 seconds
-        if (this.lastScannedCode === code.data && currentTime - this.lastScannedTime < 2000) {
+        // For now, jsQR only finds one code at a time
+        // We could implement multiple detection by scanning different regions
+        // But for simplicity, we'll use the single detection and track over time
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code) {
+            codes.push(code);
+        }
+        
+        // TODO: In a more advanced implementation, we could:
+        // 1. Divide the image into regions and scan each
+        // 2. Use a different library that supports multiple QR detection
+        // 3. Track movement of codes to maintain multiple simultaneous codes
+        
+        return codes;
+    }
+    
+    handleMultipleQRCodes(detectedCodes) {
+        const currentTime = Date.now();
+        const currentlyVisible = new Set();
+        
+        // Process all detected codes
+        for (const code of detectedCodes) {
+            currentlyVisible.add(code.data);
+            
+            // Update or create tracking info
+            if (!this.trackedCodes.has(code.data)) {
+                const matchedQR = this.qrData.qrCodes.find(qr => qr.text === code.data);
+                this.trackedCodes.set(code.data, {
+                    data: code.data,
+                    matchedQR: matchedQR,
+                    firstSeen: currentTime,
+                    lastSeen: currentTime,
+                    isVisible: true
+                });
+            } else {
+                // Update existing tracking
+                const tracking = this.trackedCodes.get(code.data);
+                tracking.lastSeen = currentTime;
+                tracking.isVisible = true;
+            }
+            
+            // Create or update overlay
+            this.createOrUpdateOverlay(code);
+        }
+        
+        // Mark codes as not visible if they weren't detected this frame
+        for (const [codeData, tracking] of this.trackedCodes) {
+            if (!currentlyVisible.has(codeData)) {
+                tracking.isVisible = false;
+                // Remove overlay for invisible codes
+                if (this.activeOverlays.has(codeData)) {
+                    this.activeOverlays.get(codeData).remove();
+                    this.activeOverlays.delete(codeData);
+                }
+            }
+        }
+        
+        // Update the codes list display
+        this.updateCodesDisplay();
+    }
+    
+    createOrUpdateOverlay(code) {
+        const codeData = code.data;
+        const tracking = this.trackedCodes.get(codeData);
+        
+        // Remove existing overlay if it exists
+        if (this.activeOverlays.has(codeData)) {
+            this.activeOverlays.get(codeData).remove();
+        }
+        
+        // Create new overlay
+        const overlayBox = document.createElement('div');
+        overlayBox.className = 'qr-overlay-box';
+        
+        if (tracking.matchedQR) {
+            overlayBox.style.borderColor = tracking.matchedQR.color;
+            overlayBox.style.backgroundColor = tracking.matchedQR.color + '20';
+        } else {
+            overlayBox.style.borderColor = '#ffffff';
+            overlayBox.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+        }
+        
+        // Calculate position and size
+        const videoRect = this.video.getBoundingClientRect();
+        const scaleX = videoRect.width / this.canvas.width;
+        const scaleY = videoRect.height / this.canvas.height;
+        
+        const left = code.location.topLeftCorner.x * scaleX;
+        const top = code.location.topLeftCorner.y * scaleY;
+        const width = (code.location.topRightCorner.x - code.location.topLeftCorner.x) * scaleX;
+        const height = (code.location.bottomLeftCorner.y - code.location.topLeftCorner.y) * scaleY;
+        
+        overlayBox.style.left = left + 'px';
+        overlayBox.style.top = top + 'px';
+        overlayBox.style.width = width + 'px';
+        overlayBox.style.height = height + 'px';
+        
+        this.overlay.appendChild(overlayBox);
+        this.activeOverlays.set(codeData, overlayBox);
+    }
+    
+    updateCodesDisplay() {
+        const currentTime = Date.now();
+        const codesArray = Array.from(this.trackedCodes.values());
+        
+        // Filter codes that were seen in the last 10 seconds
+        const recentCodes = codesArray.filter(tracking => {
+            const timeSinceLastSeen = (currentTime - tracking.lastSeen) / 1000;
+            return timeSinceLastSeen <= 10;
+        });
+        
+        // Sort by most recently seen
+        recentCodes.sort((a, b) => b.lastSeen - a.lastSeen);
+        
+        // Update the display
+        this.codesList.innerHTML = '';
+        
+        if (recentCodes.length === 0) {
+            this.codesList.innerHTML = '<div style="text-align: center; opacity: 0.7; padding: 20px;">No codes scanned in the last 10 seconds</div>';
             return;
         }
         
-        this.lastScannedCode = code.data;
-        this.lastScannedTime = currentTime;
+        for (const tracking of recentCodes) {
+            const timeSinceLastSeen = Math.floor((currentTime - tracking.lastSeen) / 1000);
+            
+            const entryDiv = document.createElement('div');
+            entryDiv.className = 'code-entry';
+            
+            const infoDiv = document.createElement('div');
+            infoDiv.className = 'code-info';
+            
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'code-name';
+            if (tracking.matchedQR) {
+                nameDiv.style.color = tracking.matchedQR.color;
+                nameDiv.textContent = tracking.matchedQR.name;
+            } else {
+                nameDiv.textContent = 'Unknown QR Code';
+            }
+            
+            const textDiv = document.createElement('div');
+            textDiv.className = 'code-text';
+            textDiv.textContent = tracking.data.length > 30 ? 
+                tracking.data.substring(0, 30) + '...' : tracking.data;
+            
+            infoDiv.appendChild(nameDiv);
+            infoDiv.appendChild(textDiv);
+            
+            const timingDiv = document.createElement('div');
+            timingDiv.className = 'code-timing';
+            
+            if (tracking.isVisible) {
+                timingDiv.textContent = '0';
+                timingDiv.className += ' visible-now';
+            } else {
+                timingDiv.textContent = timeSinceLastSeen + 's';
+                timingDiv.className += ' recently-seen';
+            }
+            
+            entryDiv.appendChild(infoDiv);
+            entryDiv.appendChild(timingDiv);
+            this.codesList.appendChild(entryDiv);
+        }
         
-        // Check if QR code matches any in our data
-        const matchedQR = this.qrData.qrCodes.find(qr => qr.text === code.data);
-        
-        if (matchedQR) {
-            this.showMatchedQR(code, matchedQR);
+        // Update result display with current visible codes
+        const visibleCodes = recentCodes.filter(t => t.isVisible);
+        if (visibleCodes.length > 0) {
+            const matchedCount = visibleCodes.filter(t => t.matchedQR).length;
+            this.result.innerHTML = `
+                <strong>🔍 ${visibleCodes.length} QR Code${visibleCodes.length > 1 ? 's' : ''} Detected</strong><br>
+                <small>${matchedCount} matched in database</small>
+            `;
+            this.result.className = matchedCount > 0 ? 'result match-found' : 'result';
         } else {
-            this.showUnknownQR(code);
+            this.result.innerHTML = '';
+            this.result.className = 'result';
         }
     }
     
-    showMatchedQR(code, matchedQR) {
-        // Clear previous overlays
-        this.clearOverlay();
-        
-        // Create overlay box
-        const overlayBox = document.createElement('div');
-        overlayBox.className = 'qr-overlay-box';
-        overlayBox.style.borderColor = matchedQR.color;
-        overlayBox.style.backgroundColor = matchedQR.color + '20'; // Add transparency
-        
-        // Calculate position and size
-        const videoRect = this.video.getBoundingClientRect();
-        const scaleX = videoRect.width / this.canvas.width;
-        const scaleY = videoRect.height / this.canvas.height;
-        
-        const left = code.location.topLeftCorner.x * scaleX;
-        const top = code.location.topLeftCorner.y * scaleY;
-        const width = (code.location.topRightCorner.x - code.location.topLeftCorner.x) * scaleX;
-        const height = (code.location.bottomLeftCorner.y - code.location.topLeftCorner.y) * scaleY;
-        
-        overlayBox.style.left = left + 'px';
-        overlayBox.style.top = top + 'px';
-        overlayBox.style.width = width + 'px';
-        overlayBox.style.height = height + 'px';
-        
-        this.overlay.appendChild(overlayBox);
-        
-        // Update result display
-        this.result.innerHTML = `
-            <strong>✅ Match Found!</strong><br>
-            <span style="color: ${matchedQR.color};">${matchedQR.name}</span><br>
-            <small>${code.data}</small>
-        `;
-        this.result.className = 'result match-found';
-        
-        // Play success sound (if available)
-        this.playSound('success');
+    startTimingUpdates() {
+        // Update timing display every second
+        setInterval(() => {
+            if (this.trackedCodes.size > 0) {
+                this.updateCodesDisplay();
+            }
+        }, 1000);
     }
     
-    showUnknownQR(code) {
-        // Clear previous overlays
-        this.clearOverlay();
-        
-        // Create basic overlay box
-        const overlayBox = document.createElement('div');
-        overlayBox.className = 'qr-overlay-box';
-        overlayBox.style.borderColor = '#ffffff';
-        overlayBox.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-        
-        // Calculate position and size
-        const videoRect = this.video.getBoundingClientRect();
-        const scaleX = videoRect.width / this.canvas.width;
-        const scaleY = videoRect.height / this.canvas.height;
-        
-        const left = code.location.topLeftCorner.x * scaleX;
-        const top = code.location.topLeftCorner.y * scaleY;
-        const width = (code.location.topRightCorner.x - code.location.topLeftCorner.x) * scaleX;
-        const height = (code.location.bottomLeftCorner.y - code.location.topLeftCorner.y) * scaleY;
-        
-        overlayBox.style.left = left + 'px';
-        overlayBox.style.top = top + 'px';
-        overlayBox.style.width = width + 'px';
-        overlayBox.style.height = height + 'px';
-        
-        this.overlay.appendChild(overlayBox);
-        
-        // Update result display
-        this.result.innerHTML = `
-            <strong>QR Code Detected</strong><br>
-            <small>${code.data}</small><br>
-            <em>Not in database</em>
-        `;
-        this.result.className = 'result';
-    }
-    
-    clearOverlay() {
+    clearAllOverlays() {
         this.overlay.innerHTML = '';
+        this.activeOverlays.clear();
     }
     
     playSound(type) {
