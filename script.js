@@ -15,9 +15,13 @@ class QRScanner {
         this.animationId = null;
         this.qrData = null;
         
-        // Track multiple QR codes with timing
-        this.trackedCodes = new Map(); // Map of code data -> tracking info
+        // Enhanced tracking with visual templates
+        this.trackedCodes = new Map(); // Map of code data -> tracking info with visual data
         this.activeOverlays = new Map(); // Map of code data -> overlay element
+        
+        // Tracking canvas for template matching
+        this.trackingCanvas = document.createElement('canvas');
+        this.trackingCtx = this.trackingCanvas.getContext('2d');
         
         this.init();
     }
@@ -61,6 +65,8 @@ class QRScanner {
             this.video.addEventListener('loadedmetadata', () => {
                 this.canvas.width = this.video.videoWidth;
                 this.canvas.height = this.video.videoHeight;
+                this.trackingCanvas.width = this.video.videoWidth;
+                this.trackingCanvas.height = this.video.videoHeight;
                 this.startQRDetection();
             });
             
@@ -104,9 +110,17 @@ class QRScanner {
                 this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
                 const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
                 
-                // Find all QR codes in the image
-                const detectedCodes = this.findAllQRCodes(imageData);
-                this.handleMultipleQRCodes(detectedCodes);
+                // First, try to track existing QR codes using visual tracking
+                this.trackExistingCodes(imageData);
+                
+                // Then, look for new QR codes with jsQR (less frequently to reduce jumping)
+                if (Math.random() < 0.3) { // Only scan for new codes 30% of the time
+                    const detectedCodes = this.findAllQRCodes(imageData);
+                    this.processNewDetections(detectedCodes);
+                }
+                
+                // Update all tracking states and displays
+                this.updateAllTracking();
             }
             
             this.animationId = requestAnimationFrame(detect);
@@ -115,59 +129,213 @@ class QRScanner {
         detect();
     }
     
+    trackExistingCodes(imageData) {
+        const currentTime = Date.now();
+        
+        for (const [codeData, tracking] of this.trackedCodes) {
+            if (tracking.template && tracking.lastPosition) {
+                // Try to track this QR code using template matching
+                const newPosition = this.trackQRCodePosition(imageData, tracking);
+                
+                if (newPosition) {
+                    // Successfully tracked - update position
+                    tracking.lastPosition = newPosition;
+                    tracking.lastSeen = currentTime;
+                    tracking.isVisible = true;
+                    tracking.consecutiveFailures = 0;
+                    
+                    // Update overlay position
+                    this.updateOverlayPosition(codeData, newPosition);
+                } else {
+                    // Failed to track - increment failure count
+                    tracking.consecutiveFailures = (tracking.consecutiveFailures || 0) + 1;
+                    
+                    // Keep showing for up to 3 seconds of failures (assuming 30fps = 90 frames)
+                    const maxFailures = 90; // ~3 seconds at 30fps
+                    if (tracking.consecutiveFailures < maxFailures) {
+                        // Still within grace period - keep showing at last known position
+                        tracking.isVisible = true;
+                    } else {
+                        // Grace period expired
+                        tracking.isVisible = false;
+                    }
+                }
+            }
+        }
+    }
+    
+    trackQRCodePosition(imageData, tracking) {
+        try {
+            // Simple template matching approach
+            const template = tracking.template;
+            const lastPos = tracking.lastPosition;
+            
+            // Search in a region around the last known position
+            const searchRadius = 50;
+            const searchLeft = Math.max(0, lastPos.left - searchRadius);
+            const searchTop = Math.max(0, lastPos.top - searchRadius);
+            const searchRight = Math.min(this.canvas.width - template.width, lastPos.left + searchRadius);
+            const searchBottom = Math.min(this.canvas.height - template.height, lastPos.top + searchRadius);
+            
+            let bestMatch = null;
+            let bestScore = 0.6; // Minimum correlation threshold
+            
+            // Step size for search (higher = faster but less accurate)
+            const step = 3;
+            
+            for (let y = searchTop; y < searchBottom; y += step) {
+                for (let x = searchLeft; x < searchRight; x += step) {
+                    const score = this.calculateTemplateMatch(imageData, template, x, y);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestMatch = { left: x, top: y, width: template.width, height: template.height };
+                    }
+                }
+            }
+            
+            return bestMatch;
+        } catch (error) {
+            console.log('Tracking error:', error);
+            return null;
+        }
+    }
+    
+    calculateTemplateMatch(imageData, template, x, y) {
+        // Simplified normalized cross-correlation
+        let correlation = 0;
+        let templateSum = 0;
+        let imageSum = 0;
+        let count = 0;
+        
+        const width = Math.min(template.width, imageData.width - x);
+        const height = Math.min(template.height, imageData.height - y);
+        
+        // Sample every few pixels for performance
+        const sampleStep = 2;
+        
+        for (let ty = 0; ty < height; ty += sampleStep) {
+            for (let tx = 0; tx < width; tx += sampleStep) {
+                const imageIdx = ((y + ty) * imageData.width + (x + tx)) * 4;
+                const templateIdx = (ty * template.width + tx) * 4;
+                
+                if (imageIdx >= 0 && imageIdx < imageData.data.length && 
+                    templateIdx >= 0 && templateIdx < template.data.length) {
+                    
+                    // Convert to grayscale
+                    const imageGray = (imageData.data[imageIdx] + imageData.data[imageIdx + 1] + imageData.data[imageIdx + 2]) / 3;
+                    const templateGray = (template.data[templateIdx] + template.data[templateIdx + 1] + template.data[templateIdx + 2]) / 3;
+                    
+                    correlation += imageGray * templateGray;
+                    imageSum += imageGray * imageGray;
+                    templateSum += templateGray * templateGray;
+                    count++;
+                }
+            }
+        }
+        
+        if (count === 0 || imageSum === 0 || templateSum === 0) return 0;
+        
+        // Normalized cross-correlation
+        return correlation / Math.sqrt(imageSum * templateSum);
+    }
+    
     findAllQRCodes(imageData) {
         const codes = [];
-        
-        // For now, jsQR only finds one code at a time
-        // We could implement multiple detection by scanning different regions
-        // But for simplicity, we'll use the single detection and track over time
         const code = jsQR(imageData.data, imageData.width, imageData.height);
         if (code) {
             codes.push(code);
         }
-        
-        // TODO: In a more advanced implementation, we could:
-        // 1. Divide the image into regions and scan each
-        // 2. Use a different library that supports multiple QR detection
-        // 3. Track movement of codes to maintain multiple simultaneous codes
-        
         return codes;
     }
     
-    handleMultipleQRCodes(detectedCodes) {
+    processNewDetections(detectedCodes) {
         const currentTime = Date.now();
-        const currentlyVisible = new Set();
         
-        // Process all detected codes
         for (const code of detectedCodes) {
-            currentlyVisible.add(code.data);
-            
-            // Update or create tracking info
             if (!this.trackedCodes.has(code.data)) {
+                // New QR code detected
                 const matchedQR = this.qrData.qrCodes.find(qr => qr.text === code.data);
+                
+                // Extract template for tracking
+                const template = this.extractQRTemplate(code);
+                const position = this.calculateQRPosition(code);
+                
                 this.trackedCodes.set(code.data, {
                     data: code.data,
                     matchedQR: matchedQR,
                     firstSeen: currentTime,
                     lastSeen: currentTime,
-                    isVisible: true
+                    isVisible: true,
+                    template: template,
+                    lastPosition: position,
+                    consecutiveFailures: 0,
+                    minimumShowUntil: currentTime + 1000 // Show for at least 1 second
                 });
+                
+                this.createOverlay(code.data, position);
             } else {
-                // Update existing tracking
+                // Existing QR code re-detected - update template and position
                 const tracking = this.trackedCodes.get(code.data);
                 tracking.lastSeen = currentTime;
                 tracking.isVisible = true;
+                tracking.consecutiveFailures = 0;
+                
+                // Update template and position
+                tracking.template = this.extractQRTemplate(code);
+                tracking.lastPosition = this.calculateQRPosition(code);
+                
+                this.updateOverlayPosition(code.data, tracking.lastPosition);
+            }
+        }
+    }
+    
+    extractQRTemplate(code) {
+        try {
+            // Extract a small template around the QR code for tracking
+            const padding = 10;
+            const left = Math.max(0, code.location.topLeftCorner.x - padding);
+            const top = Math.max(0, code.location.topLeftCorner.y - padding);
+            const width = Math.min(this.canvas.width - left, 
+                (code.location.topRightCorner.x - code.location.topLeftCorner.x) + padding * 2);
+            const height = Math.min(this.canvas.height - top,
+                (code.location.bottomLeftCorner.y - code.location.topLeftCorner.y) + padding * 2);
+            
+            const templateData = this.ctx.getImageData(left, top, width, height);
+            
+            return {
+                data: templateData.data,
+                width: width,
+                height: height
+            };
+        } catch (error) {
+            console.log('Template extraction error:', error);
+            return null;
+        }
+    }
+    
+    calculateQRPosition(code) {
+        return {
+            left: code.location.topLeftCorner.x,
+            top: code.location.topLeftCorner.y,
+            width: code.location.topRightCorner.x - code.location.topLeftCorner.x,
+            height: code.location.bottomLeftCorner.y - code.location.topLeftCorner.y
+        };
+    }
+    
+    updateAllTracking() {
+        const currentTime = Date.now();
+        
+        // Clean up old tracking data and enforce minimum show time
+        for (const [codeData, tracking] of this.trackedCodes) {
+            // Enforce minimum show time of 1 second
+            if (currentTime < tracking.minimumShowUntil) {
+                tracking.isVisible = true;
             }
             
-            // Create or update overlay
-            this.createOrUpdateOverlay(code);
-        }
-        
-        // Mark codes as not visible if they weren't detected this frame
-        for (const [codeData, tracking] of this.trackedCodes) {
-            if (!currentlyVisible.has(codeData)) {
-                tracking.isVisible = false;
-                // Remove overlay for invisible codes
+            // Remove tracking data that's been invisible for more than 10 seconds
+            const timeSinceLastSeen = (currentTime - tracking.lastSeen) / 1000;
+            if (!tracking.isVisible && timeSinceLastSeen > 10) {
+                this.trackedCodes.delete(codeData);
                 if (this.activeOverlays.has(codeData)) {
                     this.activeOverlays.get(codeData).remove();
                     this.activeOverlays.delete(codeData);
@@ -175,12 +343,11 @@ class QRScanner {
             }
         }
         
-        // Update the codes list display
+        // Update the codes display
         this.updateCodesDisplay();
     }
     
-    createOrUpdateOverlay(code) {
-        const codeData = code.data;
+    createOverlay(codeData, position) {
         const tracking = this.trackedCodes.get(codeData);
         
         // Remove existing overlay if it exists
@@ -200,23 +367,30 @@ class QRScanner {
             overlayBox.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
         }
         
-        // Calculate position and size
+        this.updateOverlayPosition(codeData, position, overlayBox);
+        
+        this.overlay.appendChild(overlayBox);
+        this.activeOverlays.set(codeData, overlayBox);
+    }
+    
+    updateOverlayPosition(codeData, position, overlayElement = null) {
+        const overlayBox = overlayElement || this.activeOverlays.get(codeData);
+        if (!overlayBox) return;
+        
+        // Calculate position relative to video element
         const videoRect = this.video.getBoundingClientRect();
         const scaleX = videoRect.width / this.canvas.width;
         const scaleY = videoRect.height / this.canvas.height;
         
-        const left = code.location.topLeftCorner.x * scaleX;
-        const top = code.location.topLeftCorner.y * scaleY;
-        const width = (code.location.topRightCorner.x - code.location.topLeftCorner.x) * scaleX;
-        const height = (code.location.bottomLeftCorner.y - code.location.topLeftCorner.y) * scaleY;
+        const left = position.left * scaleX;
+        const top = position.top * scaleY;
+        const width = position.width * scaleX;
+        const height = position.height * scaleY;
         
         overlayBox.style.left = left + 'px';
         overlayBox.style.top = top + 'px';
         overlayBox.style.width = width + 'px';
         overlayBox.style.height = height + 'px';
-        
-        this.overlay.appendChild(overlayBox);
-        this.activeOverlays.set(codeData, overlayBox);
     }
     
     updateCodesDisplay() {
